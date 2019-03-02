@@ -91,13 +91,13 @@ iPoint = 0
 for kNode in range(lNode):
     for jNode in range(mNode):
         for iNode in range(nNode):
-            Mesh_File.write( "%15.14f \t %15.14f \t %15.14f \t %s\n" % (xLength*float(iNode)/float(nNode-1), zLength*float(kNode)/float(lNode-1), yLength*float(jNode)/float(mNode-1), iPoint) )
+            Mesh_File.write( "%15.14f \t %15.14f \t %15.14f \t %s\n" % (xLength*float(iNode)/float(nNode-1), yLength*float(jNode)/float(mNode-1), zLength*float(kNode)/float(lNode-1), iPoint) )
             iPoint = iPoint + 1
 
 Mesh_File.write( "%\n" )
 Mesh_File.write( "% Boundary elements\n" )
 Mesh_File.write( "%\n" )
-Mesh_File.write( "NMARK=6\n" )
+Mesh_File.write( "NMARK=8\n" )
 
 Mesh_File.write( "MARKER_TAG= left\n" )
 elem = (nNode-1)*(mNode-1);
@@ -141,26 +141,72 @@ for jNode in range(mNode-2, -1, -1):
     for kNode in range(lNode-1):
         Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" % (KindBound, (jNode + 1)*nNode + kNode*nNode*mNode, jNode*nNode + kNode*nNode*mNode, jNode*nNode+ (kNode+1)*nNode*mNode, (jNode + 1)*nNode+ (kNode+1)*nNode*mNode ) )
 
-Mesh_File.write( "FFD_NBOX=1\n")
-Mesh_File.write( "FFD_NLEVEL=1\n")
-Mesh_File.write( "FFD_TAG=0\n")
-Mesh_File.write( "FFD_LEVEL=0\n")
-Mesh_File.write( "FFD_DEGREE_I=6\n")
-Mesh_File.write( "FFD_DEGREE_J=6\n")
-Mesh_File.write( "FFD_DEGREE_K=1\n")
-Mesh_File.write( "FFD_PARENTS=0\n")
-Mesh_File.write( "FFD_CHILDREN=0\n")
-Mesh_File.write( "FFD_CORNER_POINTS=8\n")
-Mesh_File.write( "4.0	0	-0.1\n")
-Mesh_File.write( "6.0	0	-0.1\n")
-Mesh_File.write( "6.0	2.0	-0.1\n")
-Mesh_File.write( "4.0	2.0	-0.1\n")
-Mesh_File.write( "4.0	0	0.1\n")
-Mesh_File.write( "6.0	0	0.1\n")
-Mesh_File.write( "6.0	2.0	0.1\n")
-Mesh_File.write( "4.0	2.0	0.1\n")
-Mesh_File.write( "FFD_CONTROL_POINTS=0\n")
-Mesh_File.write( "FFD_SURFACE_POINTS=0\n")
+Mesh_File.write( "MARKER_TAG=SEND_RECIEVE\n" )
+print lNode*2*(nNode+mNode-2)
+Mesh_File.write( "MARKER_ELEMS= %d\n" % (lNode*2*(nNode+mNode-2)) )
+Mesh_File.write( "SEND_TO= 1\n" ) # these nodes SEND!
+for kNode in range(0,lNode):
+    offset = kNode*mNode*nNode
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+(mNode-1)*nNode-2, 1) ) # corner circle
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+2*nNode-2        , 1) ) # corner square
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+nNode+1          , 1) ) # corner triangle
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+(mNode-2)*nNode+1, 1) ) # corner star
+    
+    for ind in range(nNode+1, 2*nNode-1):
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line A'
+
+    for ind in range((mNode-2)*nNode+1, (mNode-1)*nNode-1):
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line B'
+        
+    for ind in range(nNode+1, (mNode-2)*nNode+2, nNode):
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line C'
+
+    for ind in range(2*nNode-2, (mNode-1)*nNode-1, nNode):
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line D'
+
+
+Mesh_File.write( "MARKER_TAG=SEND_RECIEVE\n" )
+Mesh_File.write( "MARKER_ELEMS=%s\n" % (lNode*2*(nNode+mNode-2)) )
+Mesh_File.write( "SEND_TO=-1\n" ) # these nodes RECEIVE!
+for kNode in range(0,lNode):
+    offset = kNode*mNode*nNode
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+0                , 1) ) # corner o
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+(mNode-1)*nNode  , 1) ) # corner s
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+nNode*mNode-1    , 1) ) # corner t
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+nNode-1          , 1) ) # corner star
+
+    for ind in range((mNode-1)*nNode+1,nNode*mNode-1):
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line A
+
+    for ind in range(1, nNode-1):
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line B
+
+    for ind in range(2*nNode-1, (mNode-1)*nNode, nNode):
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line C
+
+    for ind in range(nNode, (mNode-2)*nNode+1, nNode):
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line D
+
+#Mesh_File.write( "FFD_NBOX=1\n")
+#Mesh_File.write( "FFD_NLEVEL=1\n")
+#Mesh_File.write( "FFD_TAG=0\n")
+#Mesh_File.write( "FFD_LEVEL=0\n")
+#Mesh_File.write( "FFD_DEGREE_I=6\n")
+#Mesh_File.write( "FFD_DEGREE_J=6\n")
+#Mesh_File.write( "FFD_DEGREE_K=1\n")
+#Mesh_File.write( "FFD_PARENTS=0\n")
+#Mesh_File.write( "FFD_CHILDREN=0\n")
+#Mesh_File.write( "FFD_CORNER_POINTS=8\n")
+#Mesh_File.write( "4.0	0	-0.1\n")
+#Mesh_File.write( "6.0	0	-0.1\n")
+#Mesh_File.write( "6.0	2.0	-0.1\n")
+#Mesh_File.write( "4.0	2.0	-0.1\n")
+#Mesh_File.write( "4.0	0	0.1\n")
+#Mesh_File.write( "6.0	0	0.1\n")
+#Mesh_File.write( "6.0	2.0	0.1\n")
+#Mesh_File.write( "4.0	2.0	0.1\n")
+#Mesh_File.write( "FFD_CONTROL_POINTS=0\n")
+#Mesh_File.write( "FFD_SURFACE_POINTS=0\n")
 
 
     

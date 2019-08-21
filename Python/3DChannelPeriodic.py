@@ -29,6 +29,7 @@
 # You should have received a copy of the GNU Lesser General Public
 # License along with SU2. If not, see <http://www.gnu.org/licenses/>.
 
+import numpy as np
 from optparse import OptionParser
 
 parser=OptionParser()
@@ -46,6 +47,10 @@ parser.add_option("-y", "--yLength", dest="yLength", default=1.0,
                   help="use this YLENGTH", metavar="YLENGTH")
 parser.add_option("-z", "--zLength", dest="zLength", default=1.0,
                   help="use this ZLENGTH", metavar="ZLENGTH")
+parser.add_option("-d", "--delta", dest="delta", default=0.0,
+                  help="delta in tanh spacing in z dir", metavar="DELTA")
+parser.add_option("-s", "--deltaZ", dest="deltaZ", default=-1.0,
+                  help="dz at the wall", metavar="DELTAZ")
 (options, args)=parser.parse_args()
 
 KindElem = 12
@@ -56,7 +61,120 @@ lNode = int(options.lNode)
 xLength = float(options.xLength)
 yLength = float(options.yLength)
 zLength = float(options.zLength)
+delta = float(options.delta)
+dZ = float(options.deltaZ)
 
+# Add periodic halo
+Lx = xLength
+Ly = yLength
+
+dx = Lx/(nNode-1)
+dy = Ly/(mNode-1)
+
+xLength = Lx+dx
+yLength = Ly+dy
+
+nNode = nNode + 1
+mNode = mNode + 1
+
+# vertical spacing
+zz = np.linspace(0, zLength, lNode)
+if (delta > 0.0):
+    ztmp = np.linspace(0,1,lNode);
+    f2 = 0.5*(1.0 + np.tanh((ztmp-0.5)*delta)/np.tanh(0.5*delta))
+    zz = zLength*f2
+
+def res(delta, z1, dxi):
+    f2 = 0.5*(1.0 + np.tanh((z1-0.5)*delta)/np.tanh(0.5*delta))
+    return f2 - dxi;
+
+def res_delta(delta, z1, dxi):
+    td2 = np.tanh(0.5*delta)
+    tzd = np.tanh((z1-0.5)*delta)
+    f2_delta = 0.5*( (z1-0.5)*(1 - tzd*tzd)/td2 - 0.5*tzd*(1 - td2*td2)/(td2*td2) )
+    return f2_delta;
+
+if (dZ > 0.0):
+
+    # invert for delta that gives dz
+    z1 = 1.0/(lNode-1)
+    dxi = dZ/zLength
+    print "dxi = " , dxi
+
+    delta = 1.0
+    r = res(delta, z1, dxi)
+    r_d = res_delta(delta, z1, dxi)
+
+    cnt = 0
+    
+    while (np.abs(r) > 1e-10 and cnt<100):
+        delta = delta - r/r_d
+        r = res(delta, z1, dxi)
+        r_d = res_delta(delta, z1, dxi)
+        cnt = cnt+1
+
+    print "Found delta = ", delta
+        
+    # use delta to compute spacing
+    ztmp = np.linspace(0,1,lNode);
+    f2 = 0.5*(1.0 + np.tanh((ztmp-0.5)*delta)/np.tanh(0.5*delta))
+    zz = zLength*f2
+    print "zz[1] = " , zz[1]
+    
+
+# generate mapping from natural, obvious point numbering to
+# one where receiver points are at the end
+renumber = np.zeros(nNode*mNode*lNode, dtype=np.int)
+cnt = 0
+
+# interior
+for kNode in range(lNode):
+    for jNode in range(1,mNode-1):
+        # iNode = 0 and iNode = nNode-1 are receivers
+        for iNode in range(1,nNode-1):
+            ind = kNode*mNode*nNode + jNode*nNode + iNode # original numbering
+            renumber[ind] = cnt
+            cnt = cnt + 1
+
+nPointDomain = cnt
+print "nPointDomain = ", nPointDomain
+            
+# periodic fringe on left
+for kNode in range(lNode):
+    for jNode in range(mNode):
+        iNode = 0
+        ind = kNode*mNode*nNode + jNode*nNode + iNode # original numbering
+        renumber[ind] = cnt
+        cnt = cnt + 1
+
+# periodic fringe on right
+for kNode in range(lNode):
+    for jNode in range(mNode):
+        iNode = nNode-1
+        ind = kNode*mNode*nNode + jNode*nNode + iNode # original numbering
+        renumber[ind] = cnt
+        cnt = cnt + 1
+
+# periodic fringe on front
+for kNode in range(lNode):
+    jNode = 0
+    for iNode in range(1,nNode-1):
+        ind = kNode*mNode*nNode + jNode*nNode + iNode # original numbering
+        renumber[ind] = cnt
+        cnt = cnt + 1
+
+# periodic fringe on right
+for kNode in range(lNode):
+    jNode = mNode-1
+    for iNode in range(1,nNode-1):
+        ind = kNode*mNode*nNode + jNode*nNode + iNode # original numbering
+        renumber[ind] = cnt
+        cnt = cnt + 1
+
+nPoint = cnt
+print "nPoint = ", nPoint
+print 'renumber[0] = ', renumber[0]
+    
 Mesh_File = open(options.filename,"w")
 
 Mesh_File.write( "%\n" )
@@ -67,7 +185,6 @@ Mesh_File.write( "%\n" )
 Mesh_File.write( "% Inner elements\n" )
 Mesh_File.write( "%\n" )
 Mesh_File.write( "NELEM=%s\n" % ((lNode-1)*(nNode-1)*(mNode-1)))
-
 
 iElem = 0
 for kNode in range(lNode-1):
@@ -81,19 +198,34 @@ for kNode in range(lNode-1):
             Point5 = (kNode+1)*mNode*nNode + jNode*nNode + iNode + 1
             Point6 = (kNode+1)*mNode*nNode + (jNode + 1)*nNode + (iNode + 1)
             Point7 = (kNode+1)*mNode*nNode + (jNode + 1)*nNode + iNode
-            Mesh_File.write( "%s \t %s \t %s \t %s \t %s \t %s \t %s \t %s \t %s \t %s\n" % (KindElem, Point0, Point1, Point2, Point3, Point4, Point5, Point6, Point7, iElem) )
+            Mesh_File.write( "%s \t %s \t %s \t %s \t %s \t %s \t %s \t %s \t %s \t %s\n" %
+                             (KindElem,
+                              renumber[Point0], renumber[Point1],
+                              renumber[Point2], renumber[Point3],
+                              renumber[Point4], renumber[Point5],
+                              renumber[Point6], renumber[Point7], iElem) )
             iElem = iElem + 1
 
-nPoint = (nNode)*(mNode)*(lNode)
 Mesh_File.write( "%\n" )
-Mesh_File.write( "NPOIN=%s\n" % ((nNode)*(mNode)*(lNode)))
+Mesh_File.write( "NPOIN= %s \t %s\n" % (nPoint, nPointDomain))
 iPoint = 0
+XYZI = np.zeros((nPoint, 3))
 for kNode in range(lNode):
     for jNode in range(mNode):
         for iNode in range(nNode):
-            Mesh_File.write( "%15.14f \t %15.14f \t %15.14f \t %s\n" % (xLength*float(iNode)/float(nNode-1), yLength*float(jNode)/float(mNode-1), zLength*float(kNode)/float(lNode-1), iPoint) )
+            #Mesh_File.write( "%15.14f \t %15.14f \t %15.14f \t %s\n" % (xLength*float(iNode)/float(nNode-1), yLength*float(jNode)/float(mNode-1),zz[kNode], iPoint) )
+            XYZI[iPoint,0] = xLength*float(iNode)/float(nNode-1)
+            XYZI[iPoint,1] = yLength*float(jNode)/float(mNode-1)
+            XYZI[iPoint,2] = zz[kNode]
+            
             iPoint = iPoint + 1
 
+ind = np.argsort(renumber)
+            
+for iPoint in range(nPoint):
+    Mesh_File.write( "%15.14f \t %15.14f \t %15.14f \t %s\n" %
+                     (XYZI[ind[iPoint],0], XYZI[ind[iPoint],1], XYZI[ind[iPoint],2], iPoint) )
+            
 Mesh_File.write( "%\n" )
 Mesh_File.write( "% Boundary elements\n" )
 Mesh_File.write( "%\n" )
@@ -104,88 +236,174 @@ elem = (nNode-1)*(mNode-1);
 Mesh_File.write( "MARKER_ELEMS=%s\n" % elem)
 for jNode in range(mNode-1):
     for iNode in range(nNode-1):
-        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" % (KindBound, jNode*nNode + iNode, jNode*nNode + (iNode+1), (jNode + 1)*nNode + (iNode + 1), (jNode + 1)*nNode + iNode) )
+        p0 = jNode*nNode + iNode
+        p1 = jNode*nNode + (iNode+1)
+        p2 = (jNode + 1)*nNode + (iNode + 1)
+        p3 = (jNode + 1)*nNode + iNode
+        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" %
+                         (KindBound,
+                          renumber[p0], renumber[p1], renumber[p2], renumber[p3]))
 
 Mesh_File.write( "MARKER_TAG= right\n" )
 elem = (nNode-1)*(mNode-1)
 Mesh_File.write( "MARKER_ELEMS=%s\n" % elem )
 for jNode in range(mNode-1):
     for iNode in range(nNode-1):
-        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" % (KindBound, nNode*mNode*(lNode - 1) + jNode*nNode + iNode, nNode*mNode*(lNode - 1) + jNode*nNode + iNode + 1, nNode*mNode*(lNode - 1) + (jNode + 1)*nNode + (iNode + 1), nNode*mNode*(lNode - 1) + (jNode + 1)*nNode + iNode) )
+        p0 = nNode*mNode*(lNode - 1) + jNode*nNode + iNode
+        p1 = nNode*mNode*(lNode - 1) + jNode*nNode + iNode + 1
+        p2 = nNode*mNode*(lNode - 1) + (jNode + 1)*nNode + (iNode + 1)
+        p3 = nNode*mNode*(lNode - 1) + (jNode + 1)*nNode + iNode
+        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" %
+                         (KindBound,
+                          renumber[p0], renumber[p1], renumber[p2], renumber[p3]))
 
 Mesh_File.write( "MARKER_TAG= lower\n" )
 elem = (nNode-1)*(lNode-1)
 Mesh_File.write( "MARKER_ELEMS=%s\n" % elem )
 for iNode in range(nNode-1):
     for kNode in range(lNode-1):
-        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" % (KindBound, iNode + kNode*nNode*mNode, iNode + (kNode+1)*nNode*mNode, iNode + 1 + (kNode+1)*nNode*mNode, iNode + 1 + kNode*nNode*mNode) )
+        p0 = iNode + kNode*nNode*mNode
+        p1 = iNode + (kNode+1)*nNode*mNode
+        p2 = iNode + 1 + (kNode+1)*nNode*mNode
+        p3 = iNode + 1 + kNode*nNode*mNode
+        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" %
+                         (KindBound,
+                          renumber[p0], renumber[p1], renumber[p2], renumber[p3]))
 
 Mesh_File.write( "MARKER_TAG= upper\n" )
 elem = (nNode-1)*(lNode-1)
 Mesh_File.write( "MARKER_ELEMS=%s\n" % elem )
 for iNode in range(nNode-1):
     for kNode in range(lNode-1):
-        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" % (KindBound, (nNode*mNode - 1) - iNode + kNode*nNode*mNode,  (nNode*mNode - 1) - iNode + (kNode+1)*nNode*mNode, (nNode*mNode - 1) - (iNode + 1) + (kNode+1)*nNode*mNode, (nNode*mNode - 1) - (iNode + 1) + kNode*nNode*mNode) )
+        p0 = (nNode*mNode - 1) - iNode + kNode*nNode*mNode
+        p1 = (nNode*mNode - 1) - iNode + (kNode+1)*nNode*mNode
+        p2 = (nNode*mNode - 1) - (iNode + 1) + (kNode+1)*nNode*mNode
+        p3 = (nNode*mNode - 1) - (iNode + 1) + kNode*nNode*mNode
+        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" %
+                         (KindBound,
+                          renumber[p0], renumber[p1], renumber[p2], renumber[p3]))
 
 Mesh_File.write( "MARKER_TAG= outlet\n" )
 elem = (mNode-1)*(lNode-1)
 Mesh_File.write( "MARKER_ELEMS=%s\n" % elem )
 for jNode in range(mNode-1):
     for kNode in range(lNode-1):
-        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" % (KindBound, jNode*nNode + (nNode - 1) + kNode*nNode*mNode,  (jNode + 1)*nNode + (nNode - 1) + kNode*nNode*mNode,  (jNode + 1)*nNode + (nNode - 1)+ (kNode+1)*nNode*mNode, jNode*nNode + (nNode - 1)+ (kNode+1)*nNode*mNode ) )
-
+        p0 = jNode*nNode + (nNode - 1) + kNode*nNode*mNode
+        p1 = (jNode + 1)*nNode + (nNode - 1) + kNode*nNode*mNode
+        p2 = (jNode + 1)*nNode + (nNode - 1)+ (kNode+1)*nNode*mNode
+        p3 = jNode*nNode + (nNode - 1)+ (kNode+1)*nNode*mNode
+        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" %
+                         (KindBound,
+                          renumber[p0], renumber[p1], renumber[p2], renumber[p3]))
+        
 Mesh_File.write( "MARKER_TAG= inlet\n" )
 elem = (mNode-1)*(lNode-1)
 Mesh_File.write( "MARKER_ELEMS=%s\n" % elem )
 for jNode in range(mNode-2, -1, -1):
     for kNode in range(lNode-1):
-        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" % (KindBound, (jNode + 1)*nNode + kNode*nNode*mNode, jNode*nNode + kNode*nNode*mNode, jNode*nNode+ (kNode+1)*nNode*mNode, (jNode + 1)*nNode+ (kNode+1)*nNode*mNode ) )
-
-Mesh_File.write( "MARKER_TAG=SEND_RECIEVE\n" )
+        p0 = (jNode + 1)*nNode + kNode*nNode*mNode
+        p1 = jNode*nNode + kNode*nNode*mNode
+        p2 = jNode*nNode+ (kNode+1)*nNode*mNode
+        p3 = (jNode + 1)*nNode+ (kNode+1)*nNode*mNode
+        Mesh_File.write( "%s \t %s \t %s \t %s \t %s\n" %
+                         (KindBound,
+                          renumber[p0], renumber[p1], renumber[p2], renumber[p3]))
+        
+Mesh_File.write( "MARKER_TAG= SEND_RECEIVE\n" )
 print lNode*2*(nNode+mNode-2)
 Mesh_File.write( "MARKER_ELEMS= %d\n" % (lNode*2*(nNode+mNode-2)) )
+#Mesh_File.write( "MARKER_ELEMS= %d\n" % (lNode*2*(nNode+mNode-2)-4) )
 Mesh_File.write( "SEND_TO= 1\n" ) # these nodes SEND!
 for kNode in range(0,lNode):
     offset = kNode*mNode*nNode
-    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+(mNode-1)*nNode-2, 1) ) # corner circle
-    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+2*nNode-2        , 1) ) # corner square
-    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+nNode+1          , 1) ) # corner triangle
-    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+(mNode-2)*nNode+1, 1) ) # corner star
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+(mNode-1)*nNode-2], 1) ) # corner circle
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+2*nNode-2        ], 2) ) # corner square
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+nNode+1          ], 3) ) # corner triangle
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+(mNode-2)*nNode+1], 4) ) # corner star
     
     for ind in range(nNode+1, 2*nNode-1):
-        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line A'
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+ind], 7) ) # line A'
 
     for ind in range((mNode-2)*nNode+1, (mNode-1)*nNode-1):
-        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line B'
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+ind], 8) ) # line B'
         
     for ind in range(nNode+1, (mNode-2)*nNode+2, nNode):
-        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line C'
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+ind], 5) ) # line C'
 
     for ind in range(2*nNode-2, (mNode-1)*nNode-1, nNode):
-        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line D'
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+ind], 6) ) # line D'
 
 
-Mesh_File.write( "MARKER_TAG=SEND_RECIEVE\n" )
+Mesh_File.write( "MARKER_TAG= SEND_RECEIVE\n" )
 Mesh_File.write( "MARKER_ELEMS=%s\n" % (lNode*2*(nNode+mNode-2)) )
+#Mesh_File.write( "MARKER_ELEMS= %d\n" % (lNode*2*(nNode+mNode-2)-4) )
 Mesh_File.write( "SEND_TO=-1\n" ) # these nodes RECEIVE!
 for kNode in range(0,lNode):
     offset = kNode*mNode*nNode
-    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+0                , 1) ) # corner o
-    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+(mNode-1)*nNode  , 1) ) # corner s
-    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+nNode*mNode-1    , 1) ) # corner t
-    Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+nNode-1          , 1) ) # corner star
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+0                ], 3) ) # corner o
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+(mNode-1)*nNode  ], 4) ) # corner s
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+nNode*mNode-1    ], 1) ) # corner t
+    Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+nNode-1          ], 2) ) # corner star
 
     for ind in range((mNode-1)*nNode+1,nNode*mNode-1):
-        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line A
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+ind], 8) ) # line A
 
     for ind in range(1, nNode-1):
-        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line B
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+ind], 7) ) # line B
 
     for ind in range(2*nNode-1, (mNode-1)*nNode, nNode):
-        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line C
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+ind], 6) ) # line C
 
     for ind in range(nNode, (mNode-2)*nNode+1, nNode):
-        Mesh_File.write( "%s \t %s \t %s\n" % (1, offset+ind, 1) ) # line D
+        Mesh_File.write( "%s \t %s \t %s\n" % (1, renumber[offset+ind], 5) ) # line D
+
+Mesh_File.write( "NPERIODIC= 9\n" )
+
+Mesh_File.write( "PERIODIC_INDEX= 0\n" )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+
+Mesh_File.write( "PERIODIC_INDEX= 1\n" )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (-Lx, -Ly, 0.0) )
+
+Mesh_File.write( "PERIODIC_INDEX= 2\n" )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (-Lx, Ly, 0.0) )
+
+Mesh_File.write( "PERIODIC_INDEX= 3\n" )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (Lx, Ly, 0.0) )
+
+Mesh_File.write( "PERIODIC_INDEX= 4\n" )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (Lx, -Ly, 0.0) )
+
+Mesh_File.write( "PERIODIC_INDEX= 5\n" )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (Lx, 0.0, 0.0) )
+
+Mesh_File.write( "PERIODIC_INDEX= 6\n" )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (-Lx, 0.0, 0.0) )
+
+Mesh_File.write( "PERIODIC_INDEX= 7\n" )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, Ly, 0.0) )
+
+Mesh_File.write( "PERIODIC_INDEX= 8\n" )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, 0.0, 0.0) )
+Mesh_File.write( "%s \t %s \t %s\n" % (0.0, -Ly, 0.0) )
+
 
 #Mesh_File.write( "FFD_NBOX=1\n")
 #Mesh_File.write( "FFD_NLEVEL=1\n")
